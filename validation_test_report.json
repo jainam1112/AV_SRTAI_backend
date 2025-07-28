@@ -1,0 +1,78 @@
+{
+  "test_info": {
+    "test_file": "debug_test.srt",
+    "original_subtitles_count": 6,
+    "processed_chunks_count": 2,
+    "test_timestamp": "2025-07-27T17:50:00"
+  },
+  "original_subtitles": [
+    {
+      "start": "0:00:01",
+      "end": "0:00:10",
+      "text": "Welcome to today's satsang. Today we will explore the journey that truly matters in our spiritual evolution."
+    },
+    {
+      "start": "0:00:10",
+      "end": "0:00:20",
+      "text": "The journey within is the most important journey. It's about discovering who we truly are beyond the mind and body."
+    },
+    {
+      "start": "0:00:20",
+      "end": "0:00:30",
+      "text": "When we turn our attention inward, we begin to see the patterns of the mind and how they create our reality."
+    },
+    {
+      "start": "0:00:30",
+      "end": "0:00:40",
+      "text": "This understanding brings us closer to our authentic self, the witness consciousness that remains unchanged."
+    },
+    {
+      "start": "0:00:40",
+      "end": "0:00:50",
+      "text": "The practices of meditation, self-inquiry, and mindful living are the tools for this inner transformation."
+    },
+    {
+      "start": "0:00:50",
+      "end": "0:01:00",
+      "text": "Remember, the goal is not to escape life but to live it with greater awareness and compassion. Thank you."
+    }
+  ],
+  "processed_chunks": [
+    {
+      "start": "0:00:01",
+      "end": "0:00:40",
+      "text": "Welcome to today's satsang. Today we will explore the journey that truly matters in our spiritual evolution.\nThe journey within is the most important journey. It's about discovering who we truly are beyond the mind and body.\nWhen we turn our attention inward, we begin to see the patterns of the mind and how they create our reality.\nThis understanding brings us closer to our authentic self, the witness consciousness that remains unchanged.",
+      "summary": "Introduction to the significance of the inner journey in spiritual evolution, focusing on self-discovery beyond the mind and body.",
+      "tags": [
+        "spiritual evolution",
+        "inner journey",
+        "self-discovery",
+        "mindfulness"
+      ]
+    },
+    {
+      "start": "0:00:40",
+      "end": "0:01:00",
+      "text": "The practices of meditation, self-inquiry, and mindful living are the tools for this inner transformation.\nRemember, the goal is not to escape life but to live it with greater awareness and compassion. Thank you.",
+      "summary": "Emphasizing the importance of meditation, self-inquiry, and mindful living as tools for inner transformation and living life with awareness and compassion.",
+      "tags": [
+        "meditation",
+        "self-inquiry",
+        "mindful living",
+        "inner transformation"
+      ]
+    }
+  ],
+  "validation_report": {
+    "coverage_complete": true,
+    "missing_subtitles": [],
+    "overlapping_chunks": [],
+    "gaps_in_timeline": [],
+    "duplicate_content": [],
+    "text_coverage_percentage": 100.0,
+    "timeline_coverage_percentage": 100.0,
+    "detailed_report": "📊 TRANSCRIPT VALIDATION REPORT\n==================================================\n✅ VALIDATION PASSED - All subtitles covered\n\n📈 Coverage Statistics:\n   Text Coverage: 100.0%\n   Timeline Coverage: 100.0%\n   Original Subtitles: 6\n   Generated Chunks: 2",
+    "warnings": [],
+    "errors": []
+  }
+}

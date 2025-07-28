@@ -1,0 +1,55 @@
+### OBJECTIVE ###
+Split the transcript into **smart chunks** where:
+- Each chunk ends at a **natural topic boundary** (like a chapter or sub-section).
+- The chunk is **semantically coherent**, not just divided by word count.
+- The chunk is between **200 to 700 words** (ideal: 400–600).
+- The **original transcript text must be preserved exactly** — no rewording, cutting, paraphrasing, merging, or altering of the original sentences in any way.
+- Each chunk must include:
+  - Start and end timestamps
+  - Complete concatenated subtitle text
+  - A concise summary
+  - A list of relevant tags/themes for that chunk
+
+### ADDITIONAL CONSTRAINTS ###
+- Do **not eliminate or skip** any subtitle entry.
+- Do **not rephrase** any part of the transcript.
+- Do **not drop speaker names**, if provided.
+- Retain **original sentence boundaries and formatting**.
+- Maintain **the sequence of subtitles exactly**.
+- If unsure about where to end a chunk, prefer semantic completeness (e.g., end of thought) over fixed size.
+
+### GLOSSARY + TIMELINE ###
+- If the transcript contains names, people, events, or references to historical/spiritual timelines, accumulate them into an additive glossary and timeline for the entire upload session.
+
+### INPUT FORMAT ###
+The input is a list of subtitles as JSON:
+[
+  { "start": "00:00:01,000", "end": "00:00:05,000", "text": "Welcome to today’s discourse..." },
+  { "start": "00:00:05,000", "end": "00:00:10,000", "text": "Let us reflect on the idea of self-effort..." },
+  ...
+]
+
+### OUTPUT FORMAT ###
+Return a JSON with:
+- `global_tags`: A list of 5–10 high-level tags covering the overall transcript
+- `chunks`: A list of objects, each with:
+  - `start`: Start timestamp of the chunk
+  - `end`: End timestamp of the chunk
+  - `text`: The full, unedited transcript text for the chunk
+  - `summary`: A 1–2 line summary of what this chunk is about
+  - `tags`: A list of relevant spiritual/conceptual themes or topics
+
+### SAMPLE OUTPUT ###
+{
+  "global_tags": ["self-effort", "liberation", "truth", "mind", "guru-disciple"],
+  "chunks": [
+    {
+      "start": "00:00:01,000",
+      "end": "00:04:12,000",
+      "text": "Welcome to today’s discourse...\nLet us reflect on the idea of self-effort...",
+      "summary": "Introduces the purpose of the discourse and outlines the significance of individual self-effort on the spiritual path.",
+      "tags": ["self-effort", "introduction", "inner transformation"]
+    },
+    ...
+  ]
+}

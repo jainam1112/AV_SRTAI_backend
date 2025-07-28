@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+openai
+srt
+requests
+python-dotenv
+pytest
+pytest-asyncio
+httpx
+pytest-mock
+pytest-cov
