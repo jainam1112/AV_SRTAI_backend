@@ -16,6 +16,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import openai
 
+
 # Load environment variables
 load_dotenv()
 
@@ -66,6 +67,7 @@ async def upload_transcript(
 
     # 5. Call LLM to get smart chunks, summaries, tags
     llm_result = process_transcript_with_llm(subtitles, prompt)
+    print("Chunks from LLM:", llm_result.get("chunks"))  # <-- Add this line
     global_tags = llm_result.get("global_tags", [])
     processed_chunks = llm_result.get("chunks", [])
 
@@ -272,21 +274,37 @@ async def setup_collections():
 
 def process_transcript_with_llm(subtitles, prompt):
     import json
+    import os
+
     input_json = json.dumps(subtitles, ensure_ascii=False)
     full_prompt = f"{prompt}\n\nINPUT:\n{input_json}\n\nOUTPUT:"
 
+    model_name = os.getenv("ANSWER_EXTRACTION_MODEL", "gpt-4o")
+
     response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model=model_name,
         messages=[
             {"role": "system", "content": "You are a helpful assistant for transcript chunking."},
             {"role": "user", "content": full_prompt}
         ],
         temperature=0.2,
-        max_tokens=4096
+        max_tokens=16384
     )
     output_text = response.choices[0].message.content.strip()
+    print("=== LLM Raw Output ===")
+    print(output_text)
+
+    # Fallback: Remove markdown code block if present
+    if output_text.startswith("```"):
+        output_text = output_text.split("```")[1]
+        if output_text.strip().startswith("json"):
+            output_text = output_text.strip()[4:]
+        output_text = output_text.strip()
+
     try:
         result = json.loads(output_text)
     except Exception:
         result = {"raw_output": output_text}
+    ##print("=== Parsed Chunks ===")
+    ##print(result.get("chunks"))
     return result

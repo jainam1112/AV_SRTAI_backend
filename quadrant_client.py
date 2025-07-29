@@ -2,6 +2,8 @@ import os
 import requests
 from embedding import get_embedding
 from dotenv import load_dotenv
+import pprint
+import uuid  # <-- STEP 1: Import the UUID library
 
 # Load environment variables
 load_dotenv()
@@ -20,8 +22,17 @@ else:
     print("Warning: QDRANT_HOST not found in environment variables")
 
 
+import os
+import requests
+from embedding import get_embedding
+from dotenv import load_dotenv
+import pprint
+import uuid  # <-- STEP 1: Import the UUID library
+
+# ... (rest of your script setup) ...
+
 def store_chunks(chunks):
-    """Store chunks in Qdrant vector database"""
+    """Store chunks in Qdrant vector database using UUIDs for IDs."""
     if not QDRANT_API_URL:
         print("Warning: Qdrant not configured, skipping storage")
         return
@@ -31,28 +42,42 @@ def store_chunks(chunks):
         return
     
     payload = {
-        "collection": COLLECTION_NAME,
         "points": []
     }
-    for idx, chunk in enumerate(chunks):
+    for chunk in chunks: # No longer need the index 'idx'
+        # --- STEP 2: Generate a unique UUID for each point ---
+        # str() converts the UUID object to the string format Qdrant expects.
+        point_id = str(uuid.uuid4())
+        
         payload["points"].append({
-            "id": f"chunk-{idx}",
+            "id": point_id,
             "vector": chunk["embedding"],
             "payload": chunk.get("payload", {})
         })
-    
+
+    # Debug print statements
+    print("=== Qdrant Chunks Payload Preview ===")
+    print("!!! DEBUG: Sending", len(payload["points"]), "points.")
+    print("!!! DEBUG: First point ID:", payload["points"][0]["id"])
+    print("!!! DEBUG: Vector dimension being sent is:", len(payload["points"][0]["vector"]))
+
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {QDRANT_API_KEY}"
+        "api-key": QDRANT_API_KEY
     }
     
     try:
-        response = requests.post(QDRANT_API_URL, json=payload, headers=headers)
+        # Using .put is correct for upserting
+        response = requests.put(QDRANT_API_URL, json=payload, headers=headers)
+        
+        if response.status_code >= 400:
+             print(f"!!! QDRANT ERROR BODY: {response.text}")
+
         response.raise_for_status()
-        print(f"Successfully stored {len(chunks)} chunks to Qdrant")
+        print(f"✅ Successfully stored {len(payload['points'])} chunks to Qdrant!")
+        
     except requests.exceptions.RequestException as e:
-        print(f"Error storing chunks to Qdrant: {e}")
-        # Don't raise the error, just log it so the upload can continue
+        print(f"❌ Error storing chunks to Qdrant: {e}")
 
 def setup_collection():
     # Stub: Setup Qdrant collection (vector size, distance, payload indexes)
@@ -79,7 +104,6 @@ def search_chunks(query_text, limit=10):
     query_embedding = get_embedding(query_text)
     
     payload = {
-        "collection": COLLECTION_NAME,
         "vector": query_embedding,
         "limit": limit,
         "with_payload": True
@@ -87,7 +111,7 @@ def search_chunks(query_text, limit=10):
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {QDRANT_API_KEY}"
+        "api-key": QDRANT_API_KEY
     }
     
     search_url = f"https://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION_NAME}/points/search"
