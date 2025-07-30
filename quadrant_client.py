@@ -95,9 +95,82 @@ def list_transcripts():
     return ["sample_transcript"]
 
 def get_chunks_for_transcript(name):
-    # Stub: Get all chunks for a transcript
-    # Implement actual Qdrant API call here
-    return []
+    """Get all chunks for a transcript from Qdrant"""
+    if not QDRANT_API_URL:
+        print("Warning: Qdrant not configured")
+        return []
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {QDRANT_API_KEY}"
+    }
+    
+    # Use scroll to get all points for the transcript
+    scroll_url = f"https://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION_NAME}/points/scroll"
+    
+    payload = {
+        "filter": {
+            "must": [
+                {
+                    "key": "transcript_name",
+                    "match": {
+                        "value": name
+                    }
+                }
+            ]
+        },
+        "limit": 100,  # Adjust as needed
+        "with_payload": True,
+        "with_vectors": False
+    }
+    
+    try:
+        response = requests.post(scroll_url, json=payload, headers=headers)
+        response.raise_for_status()
+        
+        result = response.json()
+        points = result.get("result", {}).get("points", [])
+        
+        chunks = []
+        for point in points:
+            chunk_data = point.get("payload", {})
+            chunk_data["id"] = point.get("id")
+            chunks.append(chunk_data)
+        
+        return chunks
+    
+    except requests.exceptions.RequestException as e:
+        print(f"Error retrieving chunks for transcript '{name}': {e}")
+        return []
+
+
+def update_chunk_payload(point_id, payload_update):
+    """Update a specific chunk's payload in Qdrant"""
+    if not QDRANT_API_URL:
+        print("Warning: Qdrant not configured")
+        return False
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {QDRANT_API_KEY}"
+    }
+    
+    # Set payload for specific points
+    payload_url = f"https://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION_NAME}/points/payload"
+    
+    payload = {
+        "payload": payload_update,
+        "points": [point_id]
+    }
+    
+    try:
+        response = requests.put(payload_url, json=payload, headers=headers)
+        response.raise_for_status()
+        return True
+    
+    except requests.exceptions.RequestException as e:
+        print(f"Error updating payload for point {point_id}: {e}")
+        return False
 
 def search_chunks(query_text, limit=10):
     # Get embedding for the search query

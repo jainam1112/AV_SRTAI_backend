@@ -50,3 +50,15 @@ class SearchResponse(BaseModel):
 class ErrorResponse(BaseModel):
     success: bool = False
     error: str
+
+class BioExtractionRequest(BaseModel):
+    transcript_name: str
+    ft_model_id: Optional[str] = None
+
+class BioExtractionResponse(BaseModel):
+    status: str
+    transcript_name: str
+    chunks_processed: int
+    chunks_updated: int
+    model_used: str
+    extraction_summary: Dict[str, int]  # Category -> count of chunks with that category

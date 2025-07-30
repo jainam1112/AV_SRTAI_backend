@@ -1,11 +1,12 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Dict
 from srt_processor import parse_srt
 from embedding import embed_and_tag_chunks
-from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript
+from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload
 from entity_extraction import extract_entities_from_chunks
 from bio_extraction import extract_bio_from_chunks
-from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo
+from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo, BioExtractionRequest, BioExtractionResponse
 from constants import SATSANG_CATEGORIES, LOCATIONS, SPEAKERS, BIOGRAPHICAL_CATEGORY_KEYS
 from utils import error_response, success_response
 from validation_utils import validate_chunk_coverage, print_validation_summary
@@ -271,6 +272,125 @@ async def health():
 async def setup_collections():
     setup_collection()
     return success_response({"setup": "done"})
+
+@app.post("/transcripts/{transcript_name}/extract-bio", response_model=BioExtractionResponse)
+async def extract_biographical_info(
+    transcript_name: str,
+    request: BioExtractionRequest = None
+):
+    """
+    Extract biographical information from all chunks of a specific transcript.
+    This will update the chunks in Qdrant with biographical extractions.
+    """
+    try:
+        # Get the fine-tuned model ID from request or environment
+        ft_model_id = None
+        if request and request.ft_model_id:
+            ft_model_id = request.ft_model_id
+        
+        # Get all chunks for the transcript
+        print(f"Retrieving chunks for transcript: {transcript_name}")
+        chunks = get_chunks_for_transcript(transcript_name)
+        
+        if not chunks:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No chunks found for transcript '{transcript_name}'"
+            )
+        
+        print(f"Found {len(chunks)} chunks for '{transcript_name}'")
+        
+        # Extract biographical information from chunks
+        bio_results = extract_bio_from_chunks(
+            chunks=chunks,
+            transcript_name=transcript_name,
+            ft_model_id=ft_model_id
+        )
+        
+        # Count successful extractions and update Qdrant
+        chunks_updated = 0
+        extraction_summary = {}
+        model_used = ft_model_id or os.getenv("FINE_TUNED_BIO_MODEL") or os.getenv("ANSWER_EXTRACTION_MODEL", "gpt-3.5-turbo")
+        
+        for i, (chunk, bio_result) in enumerate(zip(chunks, bio_results)):
+            if bio_result and 'biographical_extractions' in bio_result:
+                # Update the chunk in Qdrant with biographical data
+                point_id = chunk.get('id')
+                if point_id:
+                    success = update_chunk_payload(point_id, bio_result)
+                    if success:
+                        chunks_updated += 1
+                        
+                        # Count extractions by category
+                        bio_data = bio_result.get('biographical_extractions', {})
+                        for category, quotes in bio_data.items():
+                            if quotes:  # Only count non-empty categories
+                                extraction_summary[category] = extraction_summary.get(category, 0) + 1
+                
+                print(f"Processed chunk {i+1}/{len(chunks)}")
+        
+        return BioExtractionResponse(
+            status="success",
+            transcript_name=transcript_name,
+            chunks_processed=len(chunks),
+            chunks_updated=chunks_updated,
+            model_used=model_used,
+            extraction_summary=extraction_summary
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error during biographical extraction: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error extracting biographical information: {str(e)}"
+        )
+
+@app.get("/transcripts/{transcript_name}/bio-status")
+async def get_bio_extraction_status(transcript_name: str):
+    """Check biographical extraction status for a transcript"""
+    try:
+        chunks = get_chunks_for_transcript(transcript_name)
+        
+        if not chunks:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No chunks found for transcript '{transcript_name}'"
+            )
+        
+        # Analyze bio extraction status
+        total_chunks = len(chunks)
+        chunks_with_bio = 0
+        category_counts = {}
+        
+        for chunk in chunks:
+            if chunk.get('biographical_extractions'):
+                chunks_with_bio += 1
+                
+                # Count categories
+                bio_data = chunk.get('biographical_extractions', {})
+                for category, quotes in bio_data.items():
+                    if quotes:  # Only count non-empty categories
+                        category_counts[category] = category_counts.get(category, 0) + 1
+        
+        return success_response({
+            "transcript_name": transcript_name,
+            "total_chunks": total_chunks,
+            "chunks_with_bio": chunks_with_bio,
+            "bio_coverage_percentage": round((chunks_with_bio / total_chunks) * 100, 1) if total_chunks > 0 else 0,
+            "category_summary": category_counts,
+            "needs_extraction": chunks_with_bio < total_chunks
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error checking bio status: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking biographical status: {str(e)}"
+        )
 
 def process_transcript_with_llm(subtitles, prompt):
     import json
