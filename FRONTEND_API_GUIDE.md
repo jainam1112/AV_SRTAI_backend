@@ -2,10 +2,21 @@
 
 ## Quick Reference for Frontend Developers
 
-### Endpoint
+### Main Endpoints
+
+#### Upload Transcript
 ```
 POST /upload-transcript
 Content-Type: multipart/form-data
+```
+
+#### Biographical Extraction
+```
+POST /transcripts/{transcript_name}/extract-bio
+Content-Type: application/json
+
+GET /transcripts/{transcript_name}/bio-status
+GET /transcripts
 ```
 
 ### Required Field
@@ -65,6 +76,8 @@ Content-Type: multipart/form-data
 
 ## Complete cURL Examples
 
+### Upload Transcript (Main Endpoint)
+
 ### 1. Minimal Upload
 ```bash
 curl -X POST "http://localhost:10000/upload-transcript" \
@@ -100,6 +113,66 @@ curl -X POST "https://your-api.com/upload-transcript" \
   --max-time 300 \
   --retry 3 \
   -w "Status: %{http_code}\nTime: %{time_total}s\n"
+```
+
+### Bio Extraction Endpoints
+
+### 5. Extract Biographical Information
+```bash
+curl -X POST "http://localhost:10000/transcripts/my_transcript/extract-bio" \
+  -H "Content-Type: application/json" \
+  -d '{"transcript_name": "my_transcript"}'
+```
+
+### 6. Extract with Custom Fine-tuned Model
+```bash
+curl -X POST "http://localhost:10000/transcripts/my_transcript/extract-bio" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transcript_name": "my_transcript",
+    "ft_model_id": "ft:gpt-3.5-turbo:your-org:your-model:id"
+  }'
+```
+
+### 7. Check Bio Extraction Status
+```bash
+curl -X GET "http://localhost:10000/transcripts/my_transcript/bio-status"
+```
+
+**Bio Extraction Response:**
+```json
+{
+  "status": "success",
+  "transcript_name": "my_transcript",
+  "chunks_processed": 15,
+  "chunks_updated": 12,
+  "model_used": "ft:gpt-3.5-turbo:org:bio-model:123",
+  "extraction_summary": {
+    "early_life_childhood": 3,
+    "education_learning": 2,
+    "spiritual_journey_influences": 5,
+    "family_personal_relationships": 2
+  }
+}
+```
+
+**Bio Status Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "transcript_name": "my_transcript",
+    "total_chunks": 15,
+    "chunks_with_bio": 12,
+    "bio_coverage_percentage": 80.0,
+    "category_summary": {
+      "early_life_childhood": 3,
+      "education_learning": 2,
+      "spiritual_journey_influences": 5
+    },
+    "needs_extraction": false
+  }
+}
 ```
 
 ## JavaScript/TypeScript Examples
