@@ -94,55 +94,75 @@ def list_transcripts():
     # Implement actual Qdrant API call here
     return ["sample_transcript"]
 
-def get_chunks_for_transcript(name):
-    """Get all chunks for a transcript from Qdrant"""
-    if not QDRANT_API_URL:
+# In quadrant_client.py
+
+# In quadrant_client.py
+
+def get_chunks_for_transcript(name: str):
+    """
+    Fetches ALL chunks for a specific transcript from Qdrant by handling pagination.
+    Returns data in the standard Point format: {"id": "...", "payload": {...}}
+    """
+    if not all([QDRANT_HOST, QDRANT_API_KEY, COLLECTION_NAME]):
         print("Warning: Qdrant not configured")
         return []
     
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {QDRANT_API_KEY}"
-    }
-    
-    # Use scroll to get all points for the transcript
+    headers = {"Content-Type": "application/json", "api-key": QDRANT_API_KEY}
     scroll_url = f"https://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION_NAME}/points/scroll"
     
-    payload = {
-        "filter": {
-            "must": [
-                {
-                    "key": "transcript_name",
-                    "match": {
-                        "value": name
-                    }
+    # --- THIS IS THE CRITICAL FIX ---
+    # The filter key is changed back to "transcript_name" to match what is in your data.
+    scroll_filter = {
+        "must": [
+            {
+                "key": "transcript_name", # <-- CORRECTED KEY
+                "match": {
+                    "value": name
                 }
-            ]
-        },
-        "limit": 100,  # Adjust as needed
-        "with_payload": True,
-        "with_vectors": False
+            }
+        ]
     }
-    
-    try:
-        response = requests.post(scroll_url, json=payload, headers=headers)
-        response.raise_for_status()
-        
-        result = response.json()
-        points = result.get("result", {}).get("points", [])
-        
-        chunks = []
-        for point in points:
-            chunk_data = point.get("payload", {})
-            chunk_data["id"] = point.get("id")
-            chunks.append(chunk_data)
-        
-        return chunks
-    
-    except requests.exceptions.RequestException as e:
-        print(f"Error retrieving chunks for transcript '{name}': {e}")
-        return []
 
+    all_points = []
+    next_page_offset = None
+
+    print(f"Scrolling for chunks with transcript_name: '{name}'")
+
+    while True:
+        payload = {
+            "filter": scroll_filter,
+            "limit": 250,
+            "with_payload": True,
+            "with_vectors": False
+        }
+        if next_page_offset:
+            payload["offset"] = next_page_offset
+        
+        try:
+            response = requests.post(scroll_url, json=payload, headers=headers)
+            response.raise_for_status()
+            
+            result = response.json().get("result", {})
+            points_on_page = result.get("points", [])
+            
+            if not points_on_page:
+                break
+            
+            # This part is correct: extend the list with the raw point objects.
+            all_points.extend(points_on_page)
+            
+            next_page_offset = result.get("next_page_offset")
+            if not next_page_offset:
+                break
+                
+        except requests.exceptions.RequestException as e:
+            print(f"Error retrieving chunks for transcript '{name}': {e}")
+            if e.response:
+                print(f"Qdrant Error Body: {e.response.text}")
+            return [] # Return empty list on error
+            
+    print(f"✅ Found a total of {len(all_points)} chunks for '{name}'.")
+    return all_points
 
 def update_chunk_payload(point_id, payload_update):
     """Update a specific chunk's payload in Qdrant"""
@@ -192,3 +212,78 @@ def search_chunks(query_text, limit=10):
     response.raise_for_status()
     
     return response.json()
+
+def qdrant_url(path):
+    """Helper function to construct the full Qdrant URL."""
+    return f"https://{QDRANT_HOST}:{QDRANT_PORT}{path}"
+
+# --- THIS IS THE FUNCTION YOU ASKED FOR ---
+
+def scroll_all(collection_name: str = None):
+    """
+    Scrolls through and retrieves ALL points (chunks) from a Qdrant collection.
+    This function handles pagination automatically.
+
+    Args:
+        collection_name (str, optional): The name of the collection to scroll. 
+                                         Defaults to COLLECTION_NAME from .env.
+
+    Returns:
+        A list of all point dictionaries found in the collection.
+    """
+    target_collection = collection_name or COLLECTION_NAME
+    if not all([QDRANT_HOST, QDRANT_API_KEY, target_collection]):
+        print("Qdrant not configured, cannot scroll.")
+        return []
+
+    headers = {"Content-Type": "application/json", "api-key": QDRANT_API_KEY}
+
+    scroll_url = qdrant_url(f"/collections/AV_srt_recognization/points/scroll")
+    
+    all_points = []
+    # This offset will be updated with the value from the API response to get the next page
+    next_page_offset = None
+
+    print(f"Starting to scroll all chunks from collection '{target_collection}'...")
+
+    while True:
+        # Prepare the request body for the current page
+        payload = {
+            "limit": 250,           # Fetch 250 points per API call (a good balance)
+            "with_payload": True,   # We need the metadata (text, tags, etc.)
+            "with_vectors": False   # We don't need the large vector data for this
+        }
+        
+        # If we have an offset from the previous page, add it to the request
+        if next_page_offset:
+            payload["offset"] = next_page_offset
+        
+        try:
+            response = requests.post(scroll_url, json=payload, headers=headers)
+            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+            
+            result = response.json().get("result", {})
+            points_on_page = result.get("points", [])
+            
+            if not points_on_page:
+                # This can happen if the last page was exactly the limit size
+                break
+                
+            all_points.extend(points_on_page)
+
+            # Check if there is a next page
+            next_page_offset = result.get("next_page_offset")
+            if not next_page_offset:
+                # This was the last page, so we exit the loop
+                break
+            
+            print(f"Fetched {len(all_points)} points so far, getting next page...")
+        
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred while scrolling: {e}")
+            if e.response:
+                print(f"Error Body: {e.response.text}")
+            break # Exit the loop on an error
+
+    print(f"✅ Finished scrolling. Total chunks retrieved: {len(all_points)}")
+    return all_points

@@ -1,9 +1,9 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Path
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
 from srt_processor import parse_srt
 from embedding import embed_and_tag_chunks
-from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload
+from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload, scroll_all
 from entity_extraction import extract_entities_from_chunks
 from bio_extraction import extract_bio_from_chunks
 from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo, BioExtractionRequest, BioExtractionResponse
@@ -253,11 +253,81 @@ async def get_transcripts():
     transcripts = list_transcripts()
     return success_response({"transcripts": transcripts})
 
-@app.get("/transcripts/{name}/chunks")
-async def get_transcript_chunks(name: str):
-    chunks = get_chunks_for_transcript(name)
-    return success_response({"chunks": chunks})
+@app.get("/transcripts/{transcript_name}/chunks")
+def get_transcript_chunks(transcript_name: str = Path(..., description="The URL-encoded name of the transcript")):
+    """
+    Retrieves all chunks for a specific transcript from the database.
+    """
+    try:
+        # This calls the function you've already defined in quadrant_client.py
+        chunks = get_chunks_for_transcript(name=transcript_name)
+        
+        if not chunks:
+            # It's not an error if no chunks are found, just return an empty list.
+            print(f"No chunks found for transcript: '{transcript_name}'")
+        
+        # The frontend expects the data in a dictionary with a "chunks" key.
+        return {"chunks": chunks}
+        
+    except Exception as e:
+        print(f"Error retrieving chunks for '{transcript_name}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve chunks for transcript.")
 
+from pydantic import BaseModel
+from typing import List, Optional
+
+# --- DEFINE THE PYDANTIC MODELS FOR THIS ENDPOINT ---
+# (It's good practice to have these defined in one place, like near the top of the file)
+class TranscriptStatus(BaseModel):
+    transcript_name: str
+    is_bio_extracted: bool
+
+class AllTranscriptsStatusResponse(BaseModel):
+    transcripts: List[TranscriptStatus]
+
+
+# --- THIS IS THE MISSING ENDPOINT ---
+@app.get("/transcripts/status", response_model=AllTranscriptsStatusResponse)
+def get_all_transcripts_status():
+    """
+    Fetches all unique transcript names and indicates whether their
+    bio-extraction is complete.
+    """
+    try:
+        # Call the helper function from your quadrant_client
+        all_points = scroll_all()
+        
+        all_transcripts = {}
+        for point in all_points:
+            payload = point.get("payload", {})
+            # Use 'satsang_name' or 'transcript_name' depending on what you store
+            name = payload.get("satsang_name") or payload.get("transcript_name")
+            
+            if name:
+                if name not in all_transcripts:
+                    all_transcripts[name] = {"total": 0, "with_bio": 0}
+                all_transcripts[name]["total"] += 1
+                # Check for the key that your bio_extraction process adds to the payload
+                if payload.get("biographical_extractions"):
+                    all_transcripts[name]["with_bio"] += 1
+        
+        status_list = []
+        for name, counts in all_transcripts.items():
+            # A transcript is fully extracted if all its chunks have the bio data
+            is_complete = counts["with_bio"] >= counts["total"] and counts["total"] > 0
+            status_list.append(
+                TranscriptStatus(
+                    transcript_name=name,
+                    is_bio_extracted=is_complete
+                )
+            )
+            
+        return {"transcripts": sorted(status_list, key=lambda x: x.transcript_name)}
+
+    except Exception as e:
+        print(f"Error fetching all transcripts status: {e}")
+        # Return a 500 error if something goes wrong
+        raise HTTPException(status_code=500, detail="Could not retrieve transcript statuses from database")
 # Management
 @app.delete("/transcripts/{name}")
 async def delete_transcript_endpoint(name: str):
@@ -267,6 +337,27 @@ async def delete_transcript_endpoint(name: str):
 @app.get("/health")
 async def health():
     return success_response({"status": "ok"})
+
+
+# --- THIS IS THE NEW ENDPOINT ---
+
+@app.get("/chunks/all")
+def get_all_chunks():
+    """
+    Retrieves ALL chunks from the Qdrant collection using the scroll API.
+    Warning: This can be a large and slow request if you have many chunks.
+    """
+    try:
+        # This calls the helper function from your quadrant_client.py file
+        all_chunks = scroll_all()
+        
+        # The frontend expects the data to be in a dictionary with a "chunks" key
+        return {"chunks": all_chunks}
+        
+    except Exception as e:
+        print(f"Error retrieving all chunks: {e}")
+        # If something goes wrong, return a 500 Internal Server Error
+        raise HTTPException(status_code=500, detail="Failed to retrieve all chunks from the database.")
 
 @app.get("/collections/setup")
 async def setup_collections():
