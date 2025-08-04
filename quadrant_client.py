@@ -22,15 +22,6 @@ else:
     print("Warning: QDRANT_HOST not found in environment variables")
 
 
-import os
-import requests
-from embedding import get_embedding
-from dotenv import load_dotenv
-import pprint
-import uuid  # <-- STEP 1: Import the UUID library
-
-# ... (rest of your script setup) ...
-
 def store_chunks(chunks):
     """Store chunks in Qdrant vector database using UUIDs for IDs."""
     if not QDRANT_API_URL:
