@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
 from srt_processor import parse_srt
 from embedding import embed_and_tag_chunks
-from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload, scroll_all
+from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload, update_chunk_with_bio_data, scroll_all
 from entity_extraction import extract_entities_from_chunks
 from bio_extraction import extract_bio_from_chunks
 from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo, BioExtractionRequest, BioExtractionResponse
@@ -125,7 +125,7 @@ async def upload_transcript(
     else:
         print("✅ Validation passed - all subtitles covered!")
 
-    # 9. Create Qdrant payloads (add has_{category} flags, etc.)
+    # 9. Create Qdrant payloads (add bio_tags array, etc.)
     from constants import BIOGRAPHICAL_CATEGORY_KEYS
     def create_payload(chunk):
         payload = {
@@ -145,9 +145,14 @@ async def upload_transcript(
             "entities": chunk.get("entities", {}),
             "biographical_extractions": chunk.get("biographical_extractions", {}),
         }
-        # Add has_{category} flags
-        for cat in BIOGRAPHICAL_CATEGORY_KEYS:
-            payload[f"has_{cat}"] = bool(chunk.get("biographical_extractions", {}).get(cat))
+        # Clean bio data - only include categories with content, and create bio_tags array
+        bio_data = chunk.get("biographical_extractions", {})
+        cleaned_bio_data = {cat: quotes for cat, quotes in bio_data.items() if quotes}
+        payload["biographical_extractions"] = cleaned_bio_data
+        
+        # Create bio_tags array from categories that have data (non-empty arrays)
+        bio_tags = list(cleaned_bio_data.keys())
+        payload["bio_tags"] = bio_tags
         return payload
 
     # 10. Store chunks in Qdrant
@@ -405,10 +410,10 @@ async def extract_biographical_info(
         
         for i, (chunk, bio_result) in enumerate(zip(chunks, bio_results)):
             if bio_result and 'biographical_extractions' in bio_result:
-                # Update the chunk in Qdrant with biographical data
+                # Update the chunk in Qdrant with biographical data merged into payload
                 point_id = chunk.get('id')
                 if point_id:
-                    success = update_chunk_payload(point_id, bio_result)
+                    success = update_chunk_with_bio_data(point_id, bio_result)
                     if success:
                         chunks_updated += 1
                         
@@ -417,6 +422,14 @@ async def extract_biographical_info(
                         for category, quotes in bio_data.items():
                             if quotes:  # Only count non-empty categories
                                 extraction_summary[category] = extraction_summary.get(category, 0) + 1
+                        
+                        print(f"✅ Updated chunk {i+1}/{len(chunks)} with bio data")
+                    else:
+                        print(f"❌ Failed to update chunk {i+1}/{len(chunks)} in Qdrant")
+                else:
+                    print(f"⚠️ Chunk {i+1}/{len(chunks)} missing point ID, skipping Qdrant update")
+            else:
+                print(f"⚠️ Chunk {i+1}/{len(chunks)} has no bio extraction data, skipping")
                 
                 print(f"Processed chunk {i+1}/{len(chunks)}")
         
