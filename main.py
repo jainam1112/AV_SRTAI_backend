@@ -2,12 +2,12 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Path
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
 from srt_processor import parse_srt
-from text_splitter import split_subtitles_into_chunks_with_timestamps 
 from embedding import embed_and_tag_chunks, get_embedding
-from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload, scroll_all
-from entity_extraction import extract_entities_from_chunks
+from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload, update_chunk_with_bio_data, update_chunk_with_entity_data, scroll_all
+from text_splitter import split_subtitles_into_chunks_with_timestamps 
+from entity_extraction import extract_entities_from_chunks, get_entity_statistics
 from bio_extraction import extract_bio_from_chunks
-from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo, BioExtractionRequest, BioExtractionResponse
+from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo, BioExtractionRequest, BioExtractionResponse, EntityExtractionRequest, EntityExtractionResponse
 from constants import SATSANG_CATEGORIES, LOCATIONS, SPEAKERS, BIOGRAPHICAL_CATEGORY_KEYS
 from utils import error_response, success_response
 from validation_utils import validate_chunk_coverage, print_validation_summary
@@ -150,77 +150,86 @@ async def upload_transcript(
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing transcript: {str(e)}")
-    # 1. Read and Parse SRT File (No change)
-    content = await file.read()
-    raw_subtitles = parse_srt(content.decode("utf-8"))
     
-    # --- STEP 2: PERFORM TIMESTAMP-AWARE CHUNKING (REPLACES OLD CHUNKING) ---
-    print("Performing fixed-size chunking with timestamp preservation...")
-    # We no longer combine the text first. We pass the raw subtitles directly.
-    processed_chunks = split_subtitles_into_chunks_with_timestamps(
-        subtitles=raw_subtitles,
-        chunk_size=400,
-        chunk_overlap=75
-    )
-    print(f"Created {len(processed_chunks)} timestamp-aware chunks.")
 
-    # 4. Enrich each chunk (The structure of processed_chunks is now different)
-    enriched_chunks = []
-    transcript_name = satsang_name or file.filename.rsplit('.', 1)[0]
-    date_str = date or datetime.now().strftime('%Y-%m-%d')
-    tags_list = [t.strip() for t in misc_tags.split(",") if t.strip()]
-
-    print("Enriching each chunk...")
-    for i, chunk in enumerate(processed_chunks):
-        # The 'chunk' dictionary now already contains 'start', 'end', and 'text'
-        chunk_text = chunk["text"]
+@app.post("/transcripts/{transcript_name}/extract-entities", response_model=EntityExtractionResponse)
+async def extract_entities(
+    transcript_name: str,
+    request: EntityExtractionRequest = None
+):
+    """
+    Extract entities from all chunks of a specific transcript.
+    This will update the chunks in Qdrant with entity extractions.
+    """
+    try:
+        # Get parameters from request
+        use_ai = True
+        include_statistics = True
+        if request:
+            use_ai = request.use_ai if request.use_ai is not None else True
+            include_statistics = request.include_statistics if request.include_statistics is not None else True
         
-        enrichment_data = enrich_chunk_with_llm(chunk_text)
-        embedding_vector = get_embedding(chunk_text)
+        # Get all chunks for the transcript
+        print(f"Retrieving chunks for transcript: {transcript_name}")
+        chunks = get_chunks_for_transcript(transcript_name)
         
-        if not embedding_vector:
-            print(f"Warning: Skipping chunk {i+1} due to failed embedding generation.")
-            continue
-
-        # Prepare the final payload for this chunk
-        chunk_payload = {
-            "transcript_name": transcript_name,
-            "satsang_name": satsang_name,
-            "text": chunk_text,
-            "start_time": chunk["start"], # <-- ADD THE START TIME
-            "end_time": chunk["end"],     # <-- ADD THE END TIME
-            "summary": enrichment_data.get("summary", ""),
-            "tags": enrichment_data.get("tags", []),
-            "date": date_str,
-            "category": category,
-            "location": location,
-            "speaker": speaker,
-            "misc_tags": tags_list
-        }
+        if not chunks:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No chunks found for transcript '{transcript_name}'"
+            )
         
-        enriched_chunks.append({
-            "embedding": embedding_vector,
-            "payload": chunk_payload
-        })
-    
-    # 5. Store the final list of enriched chunks in Qdrant (No change)
-    chunks_uploaded_count = store_chunks(enriched_chunks)
-
-    # 6. Return a simplified success response (No change)
-    return {
-        "status": "success",
-        "message": f"Successfully processed and stored {chunks_uploaded_count} chunks.",
-        "chunks_uploaded": chunks_uploaded_count,
-        "validation": None
-    }
-
-@app.post("/process-entities/{name}")
-async def process_entities(name: str):
-    # Dummy: fetch chunks, extract entities, update DB
-    chunks = get_chunks_for_transcript(name)
-    entities = extract_entities_from_chunks(chunks, name)
-    # Update DB with entities (not implemented)
-    return success_response({"entities": entities})
+        print(f"Found {len(chunks)} chunks for '{transcript_name}'")
+        
+        # Extract entities from chunks
+        entity_results = extract_entities_from_chunks(
+            chunks=chunks,
+            transcript_name=transcript_name,
+            use_ai=use_ai
+        )
+        
+        # Count successful extractions and update Qdrant
+        chunks_updated = 0
+        method_used = "AI" if use_ai else "rule-based"
+        
+        for i, (chunk, entity_result) in enumerate(zip(chunks, entity_results)):
+            if entity_result:
+                # Update the chunk in Qdrant with entity data
+                point_id = chunk.get('id')
+                if point_id:
+                    success = update_chunk_with_entity_data(point_id, entity_result)
+                    if success:
+                        chunks_updated += 1
+                        print(f"✅ Updated chunk {i+1}/{len(chunks)} with entity data")
+                    else:
+                        print(f"❌ Failed to update chunk {i+1}/{len(chunks)} in Qdrant")
+                else:
+                    print(f"⚠️ Chunk {i+1}/{len(chunks)} missing point ID, skipping Qdrant update")
+            else:
+                print(f"⚠️ Chunk {i+1}/{len(chunks)} has no entity data, skipping")
+        
+        # Calculate statistics if requested
+        entity_statistics = None
+        if include_statistics:
+            entity_statistics = get_entity_statistics(entity_results)
+        
+        return EntityExtractionResponse(
+            status="success",
+            transcript_name=transcript_name,
+            chunks_processed=len(chunks),
+            chunks_updated=chunks_updated,
+            method_used=method_used,
+            entity_statistics=entity_statistics
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error during entity extraction: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error extracting entities: {str(e)}"
+        )
 
 @app.post("/extract-bio/{name}")
 async def extract_bio(name: str):
@@ -417,10 +426,10 @@ async def extract_biographical_info(
         
         for i, (chunk, bio_result) in enumerate(zip(chunks, bio_results)):
             if bio_result and 'biographical_extractions' in bio_result:
-                # Update the chunk in Qdrant with biographical data
+                # Update the chunk in Qdrant with biographical data merged into payload
                 point_id = chunk.get('id')
                 if point_id:
-                    success = update_chunk_payload(point_id, bio_result)
+                    success = update_chunk_with_bio_data(point_id, bio_result)
                     if success:
                         chunks_updated += 1
                         
@@ -429,6 +438,14 @@ async def extract_biographical_info(
                         for category, quotes in bio_data.items():
                             if quotes:  # Only count non-empty categories
                                 extraction_summary[category] = extraction_summary.get(category, 0) + 1
+                        
+                        print(f"✅ Updated chunk {i+1}/{len(chunks)} with bio data")
+                    else:
+                        print(f"❌ Failed to update chunk {i+1}/{len(chunks)} in Qdrant")
+                else:
+                    print(f"⚠️ Chunk {i+1}/{len(chunks)} missing point ID, skipping Qdrant update")
+            else:
+                print(f"⚠️ Chunk {i+1}/{len(chunks)} has no bio extraction data, skipping")
                 
                 print(f"Processed chunk {i+1}/{len(chunks)}")
         

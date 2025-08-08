@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 class Entities(BaseModel):
     people: Optional[List[str]] = None
@@ -62,3 +62,15 @@ class BioExtractionResponse(BaseModel):
     chunks_updated: int
     model_used: str
     extraction_summary: Dict[str, int]  # Category -> count of chunks with that category
+
+class EntityExtractionRequest(BaseModel):
+    use_ai: Optional[bool] = True
+    include_statistics: Optional[bool] = True
+
+class EntityExtractionResponse(BaseModel):
+    status: str
+    transcript_name: str
+    chunks_processed: int
+    chunks_updated: int
+    method_used: str  # "AI" or "rule-based"
+    entity_statistics: Optional[Dict[str, Any]] = None

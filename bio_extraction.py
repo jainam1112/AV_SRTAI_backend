@@ -13,8 +13,16 @@ load_dotenv()
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# Configure logging for this module
+logger = logging.getLogger("bio_extraction")
+if not logger.handlers:
+    # Only add handler if none exist to avoid duplicates
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 def extract_bio_from_chunks(chunks: List[Dict[str, Any]], transcript_name: str, ft_model_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -48,10 +56,17 @@ def extract_bio_from_chunks(chunks: List[Dict[str, Any]], transcript_name: str, 
     for i, chunk in enumerate(chunks):
         logger.info(f"Processing chunk {i+1}/{len(chunks)} for biographical extraction")
         
-        # Extract text from chunk
+        # Extract text from chunk (handle Qdrant format)
         chunk_text = ""
         if isinstance(chunk, dict):
-            chunk_text = chunk.get('text', '') or chunk.get('original_text', '') or chunk.get('content', '')
+            # First check if it's a Qdrant format with payload
+            if 'payload' in chunk and isinstance(chunk['payload'], dict):
+                chunk_text = chunk['payload'].get('original_text', '')
+                logger.debug(f"Chunk {i+1}: Using text from payload.original_text")
+            else:
+                # Fallback to direct text fields
+                chunk_text = chunk.get('text', '') or chunk.get('original_text', '') or chunk.get('content', '')
+                logger.debug(f"Chunk {i+1}: Using text from direct fields")
         elif isinstance(chunk, str):
             chunk_text = chunk
         else:
@@ -73,15 +88,15 @@ def extract_bio_from_chunks(chunks: List[Dict[str, Any]], transcript_name: str, 
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are an expert at extracting specific biographical information about Gurudev from transcripts, outputting a JSON object with predefined keys like early_life_childhood, education_learning, etc. Only include verbatim quotes. If no information for a category, use an empty list []."
+                        "content": "You are an expert at extracting specific biographical information about Gurudev from transcripts. Return a JSON object with predefined keys like early_life_childhood, education_learning, spiritual_journey, health_wellness, family_relationships, career_work, personal_interests, philosophical_views, experiences_travels, challenges_obstacles. Only include verbatim quotes from the text. If no information for a category, use an empty list []."
                     },
                     {
                         "role": "user", 
-                        "content": f"Transcript Chunk: \"{chunk_text}\""
+                        "content": f"Extract biographical information from this transcript chunk:\n\n{chunk_text}\n\nReturn only a JSON object with the biographical categories as keys and arrays of verbatim quotes as values."
                     }
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=4096,
+                max_tokens=3000,  # Reduced to prevent overly long responses
                 temperature=0.0
             )
             
@@ -94,8 +109,66 @@ def extract_bio_from_chunks(chunks: List[Dict[str, Any]], transcript_name: str, 
                 extracted_json_str = extracted_json_str[:-3]
             extracted_json_str = extracted_json_str.strip()
             
-            # Parse JSON response
-            parsed_bio_data = json.loads(extracted_json_str)
+            # Enhanced JSON cleanup for malformed responses
+            if not extracted_json_str.startswith('{'):
+                # Find the first { character
+                start_idx = extracted_json_str.find('{')
+                if start_idx != -1:
+                    extracted_json_str = extracted_json_str[start_idx:]
+            
+            # Try to fix unterminated strings at the end
+            if extracted_json_str.count('"') % 2 != 0:
+                # Odd number of quotes - likely unterminated string
+                logger.warning(f"Chunk {i+1}: Detected potential unterminated string, attempting to fix")
+                # Find the last quote and see if we need to close it
+                last_quote_idx = extracted_json_str.rfind('"')
+                if last_quote_idx != -1:
+                    # Check if this quote is properly closed
+                    remaining = extracted_json_str[last_quote_idx+1:].strip()
+                    if remaining and not remaining.startswith((':', ',', '}', ']')):
+                        # Likely an unterminated string, truncate at the quote
+                        extracted_json_str = extracted_json_str[:last_quote_idx+1] + '"]}'
+                        logger.warning(f"Chunk {i+1}: Truncated unterminated string")
+            
+            # Parse JSON response with better error handling
+            try:
+                parsed_bio_data = json.loads(extracted_json_str)
+            except json.JSONDecodeError as json_err:
+                # If parsing fails, try to extract a valid JSON object
+                logger.warning(f"Chunk {i+1}: Initial JSON parse failed, attempting recovery")
+                
+                # Try to find the largest valid JSON object
+                for end_pos in range(len(extracted_json_str), 0, -1):
+                    test_str = extracted_json_str[:end_pos]
+                    # Ensure it ends properly
+                    if not test_str.endswith('}'):
+                        test_str += '}'
+                    try:
+                        parsed_bio_data = json.loads(test_str)
+                        logger.info(f"Chunk {i+1}: Successfully recovered JSON by truncating to {end_pos} characters")
+                        break
+                    except json.JSONDecodeError:
+                        continue
+                else:
+                    # If all attempts fail, raise the original error
+                    raise json_err
+            
+            # Validate the parsed data structure
+            if not isinstance(parsed_bio_data, dict):
+                logger.warning(f"Chunk {i+1}: Parsed data is not a dictionary, creating empty structure")
+                parsed_bio_data = {cat: [] for cat in BIOGRAPHICAL_CATEGORY_KEYS}
+            
+            # Ensure all expected categories exist and are lists
+            for cat_key in BIOGRAPHICAL_CATEGORY_KEYS:
+                if cat_key not in parsed_bio_data:
+                    parsed_bio_data[cat_key] = []
+                elif not isinstance(parsed_bio_data[cat_key], list):
+                    # Convert non-list values to lists
+                    if isinstance(parsed_bio_data[cat_key], str):
+                        parsed_bio_data[cat_key] = [parsed_bio_data[cat_key]] if parsed_bio_data[cat_key].strip() else []
+                    else:
+                        parsed_bio_data[cat_key] = []
+                        logger.warning(f"Chunk {i+1}: Converted non-list value in category '{cat_key}' to empty list")
             
             # Create biographical extraction with category flags
             bio_extraction = {
@@ -110,9 +183,25 @@ def extract_bio_from_chunks(chunks: List[Dict[str, Any]], transcript_name: str, 
             extracted_bios.append(bio_extraction)
             logger.info(f"Successfully extracted biographical data for chunk {i+1}")
             
+            # Log summary of what was extracted
+            categories_with_data = [cat for cat, quotes in parsed_bio_data.items() if quotes]
+            if categories_with_data:
+                logger.info(f"Chunk {i+1}: Found data in categories: {', '.join(categories_with_data)}")
+            else:
+                logger.info(f"Chunk {i+1}: No biographical data found in this chunk")
+            
         except json.JSONDecodeError as e_json:
-            logger.error(f"JSON parse error for chunk {i+1}: {e_json}. Response: {extracted_json_str[:300] if 'extracted_json_str' in locals() else 'N/A'}")
-            extracted_bios.append({})
+            logger.error(f"JSON parse error for chunk {i+1}: {e_json}")
+            logger.error(f"Chunk {i+1} problematic response (first 500 chars): {extracted_json_str[:500] if 'extracted_json_str' in locals() else 'N/A'}")
+            logger.error(f"Chunk {i+1} problematic response (last 200 chars): {extracted_json_str[-200:] if 'extracted_json_str' in locals() and len(extracted_json_str) > 200 else 'N/A'}")
+            # Try to create a minimal valid response
+            fallback_bio = {
+                'biographical_extractions': {cat: [] for cat in BIOGRAPHICAL_CATEGORY_KEYS}
+            }
+            for cat_key in BIOGRAPHICAL_CATEGORY_KEYS:
+                fallback_bio[f"has_{cat_key}"] = False
+            extracted_bios.append(fallback_bio)
+            logger.info(f"Chunk {i+1}: Created fallback bio extraction due to JSON error")
             
         except OpenAIError as e_openai:
             logger.error(f"OpenAI API error for chunk {i+1}: {e_openai}")

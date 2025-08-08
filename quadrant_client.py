@@ -156,7 +156,7 @@ def get_chunks_for_transcript(name: str):
     return all_points
 
 def update_chunk_payload(point_id, payload_update):
-    """Update a specific chunk's payload in Qdrant"""
+    """Update a specific chunk's payload in Qdrant using set operation for partial updates"""
     if not QDRANT_API_URL:
         print("Warning: Qdrant not configured")
         return False
@@ -166,22 +166,117 @@ def update_chunk_payload(point_id, payload_update):
         "Authorization": f"Bearer {QDRANT_API_KEY}"
     }
     
-    # Set payload for specific points
+    # Use the set payload endpoint for partial updates
     payload_url = f"https://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION_NAME}/points/payload"
     
+    # Use POST with "set" operation for partial update
     payload = {
         "payload": payload_update,
         "points": [point_id]
     }
     
     try:
-        response = requests.put(payload_url, json=payload, headers=headers)
+        # Use POST for set operation (partial update)
+        response = requests.post(payload_url, json=payload, headers=headers)
         response.raise_for_status()
         return True
     
     except requests.exceptions.RequestException as e:
         print(f"Error updating payload for point {point_id}: {e}")
         return False
+
+def update_chunk_with_bio_data(point_id, bio_extraction, chunk_payload=None):
+    """
+    Update a chunk's payload with biographical extraction data.
+    This merges bio data into the existing payload structure.
+    
+    Args:
+        point_id: The Qdrant point ID
+        bio_extraction: Dictionary containing biographical_extractions and has_{category} flags
+        chunk_payload: Optional current payload to merge with (if not provided, will fetch from Qdrant)
+    
+    Returns:
+        bool: Success status
+    """
+    if not QDRANT_API_URL:
+        print("Warning: Qdrant not configured")
+        return False
+    
+    from constants import BIOGRAPHICAL_CATEGORY_KEYS
+    
+    # If no current payload provided, we'll do a partial update
+    if chunk_payload is None:
+        # Clean bio data - only include categories with content
+        bio_data = bio_extraction.get("biographical_extractions", {})
+        cleaned_bio_data = {cat: quotes for cat, quotes in bio_data.items() if quotes}
+        
+        # Just update the bio-related fields
+        payload_update = {
+            "biographical_extractions": cleaned_bio_data,
+        }
+        
+        # Create bio_tags array from categories that have data (non-empty arrays)
+        bio_tags = list(cleaned_bio_data.keys())
+        payload_update["bio_tags"] = bio_tags
+        
+    else:
+        # Merge with existing payload
+        payload_update = chunk_payload.copy()
+        
+        # Clean bio data - only include categories with content
+        bio_data = bio_extraction.get("biographical_extractions", {})
+        cleaned_bio_data = {cat: quotes for cat, quotes in bio_data.items() if quotes}
+        
+        payload_update["biographical_extractions"] = cleaned_bio_data
+        
+        # Create bio_tags array from categories that have data (non-empty arrays)
+        bio_tags = list(cleaned_bio_data.keys())
+        payload_update["bio_tags"] = bio_tags
+    
+    return update_chunk_payload(point_id, payload_update)
+
+def update_chunk_with_entity_data(point_id, entity_extraction, chunk_payload=None):
+    """
+    Update a chunk's payload with entity extraction data.
+    This merges entity data into the existing payload structure.
+    
+    Args:
+        point_id: The Qdrant point ID
+        entity_extraction: Dictionary containing extracted entities
+        chunk_payload: Optional current payload to merge with (if not provided, will fetch from Qdrant)
+    
+    Returns:
+        bool: Success status
+    """
+    if not QDRANT_API_URL:
+        print("Warning: Qdrant not configured")
+        return False
+    
+    # Clean entity data - only include categories with content
+    cleaned_entities = {}
+    for category, data in entity_extraction.items():
+        if category == "self_references":
+            # Always include boolean field
+            cleaned_entities[category] = bool(data)
+        elif isinstance(data, list) and data:
+            # Only include non-empty lists
+            cleaned_entities[category] = data
+    
+    # Create entity_tags array from categories that have data
+    entity_tags = []
+    for category, data in cleaned_entities.items():
+        if category == "self_references" and data:
+            entity_tags.append("self_references")
+        elif isinstance(data, list) and data:
+            entity_tags.append(category)
+    
+    # Just update the entity-related fields
+    payload_update = {
+        "entities": cleaned_entities,
+        "entity_tags": entity_tags
+    }
+    
+    return update_chunk_payload(point_id, payload_update)
 
 def search_chunks(query_text, limit=10):
     print(f"Searching for: {query_text}")
