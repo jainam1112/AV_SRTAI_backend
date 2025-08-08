@@ -1,0 +1,354 @@
+{
+	"info": {
+		"_postman_id": "entity-extraction-api",
+		"name": "Entity Extraction API",
+		"description": "Complete API collection for testing entity extraction functionality with spiritual discourse transcripts",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Entity Extraction",
+			"item": [
+				{
+					"name": "Extract Entities with AI",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"use_ai\": true,\n  \"include_statistics\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transcripts/{{transcript_name}}/extract-entities",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transcripts",
+								"{{transcript_name}}",
+								"extract-entities"
+							]
+						},
+						"description": "Extract entities using AI (OpenAI) with comprehensive statistics. This is the most accurate method but requires OpenAI API key and is slower."
+					},
+					"response": []
+				},
+				{
+					"name": "Extract Entities with Rules",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"use_ai\": false,\n  \"include_statistics\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transcripts/{{transcript_name}}/extract-entities",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transcripts",
+								"{{transcript_name}}",
+								"extract-entities"
+							]
+						},
+						"description": "Extract entities using rule-based pattern matching. Faster but less comprehensive than AI extraction. Good for testing or when OpenAI API is not available."
+					},
+					"response": []
+				},
+				{
+					"name": "Extract Entities (Minimal)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"use_ai\": true,\n  \"include_statistics\": false\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transcripts/{{transcript_name}}/extract-entities",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transcripts",
+								"{{transcript_name}}",
+								"extract-entities"
+							]
+						},
+						"description": "Extract entities with AI but without detailed statistics. Faster response for when you only need the extraction confirmation."
+					},
+					"response": []
+				},
+				{
+					"name": "Extract Entities (Default Settings)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transcripts/{{transcript_name}}/extract-entities",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transcripts",
+								"{{transcript_name}}",
+								"extract-entities"
+							]
+						},
+						"description": "Extract entities with default settings (AI enabled, statistics included). Empty body uses all defaults."
+					},
+					"response": []
+				}
+			],
+			"description": "Entity extraction endpoints for processing spiritual discourse transcripts and extracting 8 types of entities: people, places, concepts, scriptures, dates, organizations, events, and objects."
+		},
+		{
+			"name": "Bio Extraction",
+			"item": [
+				{
+					"name": "Extract Bio with Tags",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"use_fine_tuned_model\": true,\n  \"include_statistics\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/transcripts/{{transcript_name}}/extract-bio",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transcripts",
+								"{{transcript_name}}",
+								"extract-bio"
+							]
+						},
+						"description": "Extract biographical information using fine-tuned model. Creates bio_tags arrays instead of boolean flags for efficient filtering."
+					},
+					"response": []
+				}
+			],
+			"description": "Biographical extraction endpoints using the fine-tuned model to identify spiritual discourse categories."
+		},
+		{
+			"name": "Transcript Management",
+			"item": [
+				{
+					"name": "Upload Transcript",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "category",
+									"value": "Spiritual Discourse",
+									"type": "text"
+								},
+								{
+									"key": "location",
+									"value": "Ashram",
+									"type": "text"
+								},
+								{
+									"key": "speaker",
+									"value": "Guruji",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/upload-transcript",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"upload-transcript"
+							]
+						},
+						"description": "Upload a new SRT transcript file for processing and storage in Qdrant vector database."
+					},
+					"response": []
+				},
+				{
+					"name": "List Transcripts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/transcripts",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"transcripts"
+							]
+						},
+						"description": "Get list of all available transcripts in the system."
+					},
+					"response": []
+				}
+			],
+			"description": "Basic transcript management operations for uploading and listing transcripts."
+		},
+		{
+			"name": "Search",
+			"item": [
+				{
+					"name": "Search Transcripts",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"meditation and self-realization\",\n  \"filters\": {\n    \"transcript_name\": \"{{transcript_name}}\"\n  },\n  \"limit\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/search",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"search"
+							]
+						},
+						"description": "Search through processed transcripts using semantic search. Can filter by transcript name, bio_tags, entity types, etc."
+					},
+					"response": []
+				},
+				{
+					"name": "Search with Entity Filters",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"spiritual teachings\",\n  \"filters\": {\n    \"entities.people\": [\"Krishna\", \"Buddha\"],\n    \"entities.concepts\": [\"meditation\"]\n  },\n  \"limit\": 5\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/search",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"search"
+							]
+						},
+						"description": "Search with entity-based filters to find specific content mentioning particular people, concepts, places, etc."
+					},
+					"response": []
+				},
+				{
+					"name": "Search with Bio Tags",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"spiritual practices\",\n  \"filters\": {\n    \"bio_tags\": [\"meditation_practices\", \"spiritual_concepts\"]\n  },\n  \"limit\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/search",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"search"
+							]
+						},
+						"description": "Search using biographical tags to filter content by categories like meditation practices, spiritual concepts, etc."
+					},
+					"response": []
+				}
+			],
+			"description": "Search operations with various filtering options including entity-based and bio tag-based filters."
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "transcript_name",
+			"value": "sample_discourse",
+			"type": "string",
+			"description": "Name of the transcript to use for testing. Change this to match your uploaded transcript."
+		}
+	]
+}

@@ -2,11 +2,12 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Path
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
 from srt_processor import parse_srt
-from embedding import embed_and_tag_chunks
-from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload, update_chunk_with_bio_data, scroll_all
-from entity_extraction import extract_entities_from_chunks
+from embedding import embed_and_tag_chunks, get_embedding
+from quadrant_client import store_chunks, search_chunks, setup_collection, delete_transcript, list_transcripts, get_chunks_for_transcript, update_chunk_payload, update_chunk_with_bio_data, update_chunk_with_entity_data, scroll_all
+from text_splitter import split_subtitles_into_chunks_with_timestamps 
+from entity_extraction import extract_entities_from_chunks, get_entity_statistics
 from bio_extraction import extract_bio_from_chunks
-from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo, BioExtractionRequest, BioExtractionResponse
+from models import UploadTranscriptResponse, SearchResponse, ErrorResponse, ChunkPayload, ValidationInfo, BioExtractionRequest, BioExtractionResponse, EntityExtractionRequest, EntityExtractionResponse
 from constants import SATSANG_CATEGORIES, LOCATIONS, SPEAKERS, BIOGRAPHICAL_CATEGORY_KEYS
 from utils import error_response, success_response
 from validation_utils import validate_chunk_coverage, print_validation_summary
@@ -29,215 +30,206 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# --- Internal Helper Function for Chunk Enrichment ---
+# In main.py
 
+def enrich_chunk_with_llm(text_chunk: str):
+    """
+    Takes a single text chunk and calls an LLM to get conceptual tags.
+    Summarization has been removed from this process.
+    """
+    model_name = os.getenv("ANSWER_EXTRACTION_MODEL", "gpt-3.5-turbo")
+    
+    # --- MODIFIED PROMPT: Only asks for tags ---
+    prompt = f"""
+    You are an expert in analyzing spiritual and philosophical content.
+    For the following text chunk, provide up to 3 relevant conceptual tags.
+
+    TEXT CHUNK:
+    "{text_chunk}"
+
+    Your response must be a valid JSON object with a single key "tags", which is a list of strings.
+    Example:
+    {{
+      "tags": ["mindfulness", "self-reflection", "practice"]
+    }}
+    """
+    
+    try:
+        response = openai.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that provides conceptual tags for text chunks."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+        output_text = response.choices[0].message.content.strip()
+        return json.loads(output_text)
+    except Exception as e:
+        print(f"Warning: Could not enrich chunk with LLM. Error: {e}")
+        # --- MODIFIED FALLBACK: Only returns tags ---
+        return {"tags": []}
+    
 # Document Processing
-@app.post("/upload-transcript", response_model=UploadTranscriptResponse)
+@app.post("/upload-transcript")
 async def upload_transcript(
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # Define the file parameter correctly
     category: str = Form(default="Miscellaneous"),
     location: str = Form(default="Unknown"),
     speaker: str = Form(default="Gurudev"),
     satsang_name: str = Form(default=""),
     satsang_code: str = Form(default=""),
-    misc_tags: str = Form(default=""),  # Comma-separated string
-    date: str = Form(default="")  # Date in YYYY-MM-DD format, defaults to today
+    misc_tags: str = Form(default=""),
+    date: str = Form(default="")
 ):
-
-    # 1. Validate file type and encoding
-    if not file.filename.endswith('.srt'):
-        raise HTTPException(status_code=400, detail="Only .srt files are supported.")
     try:
+        # Read the file content
         content = await file.read()
-        text = content.decode("utf-8")
-    except Exception:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+        text = content.decode("utf-8")  # Ensure the file is UTF-8 encoded
 
-    # 2. Parse SRT
-    chunks = parse_srt(text)
-    transcript_name = file.filename.rsplit('.', 1)[0]
+        # Parse subtitles
+        subtitles = parse_srt(text)
+        print(f"Subtitles: {subtitles}")  # Debug: Print parsed subtitles
 
-    # 3. Prepare subtitles for LLM prompt
-    subtitles = [
-        {"start": c["start"], "end": c["end"], "text": c["text"]}
-        for c in chunks
-    ]
-
-    # 4. Load transcript processing prompt
-    with open("transcript_processing_prompt", "r", encoding="utf-8") as f:
-        prompt = f.read()
-
-    # 5. Call LLM to get smart chunks, summaries, tags
-    llm_result = process_transcript_with_llm(subtitles, prompt)
-    print("Chunks from LLM:", llm_result.get("chunks"))  # <-- Add this line
-    global_tags = llm_result.get("global_tags", [])
-    processed_chunks = llm_result.get("chunks", [])
-
-    # 6. Add metadata to each chunk
-    if date:
-        # Use user-provided date
-        date_str = date
-    else:
-        # Default to today's date
-        date_str = datetime.now().strftime('%Y-%m-%d')
-    
-    tags_list = [t.strip() for t in misc_tags.split(",") if t.strip()] if misc_tags else []
-    for chunk in processed_chunks:
-        chunk["transcript_name"] = transcript_name
-        chunk["date"] = date_str
-        chunk["category"] = category
-        chunk["location"] = location
-        chunk["speaker"] = speaker
-        chunk["satsang_name"] = satsang_name
-        chunk["satsang_code"] = satsang_code
-        chunk["misc_tags"] = tags_list
-        chunk["global_tags"] = global_tags
-
-    # 7. Generate embeddings and tags
-    enriched_chunks = embed_and_tag_chunks(processed_chunks)
-    
-    # 8. VALIDATION - Ensure all subtitles are covered
-    print("\n🔍 Validating chunk coverage...")
-    validation_report = validate_chunk_coverage(subtitles, processed_chunks)
-    print_validation_summary(validation_report)
-    
-    # Check validation mode from environment variable
-    validation_mode = os.getenv("VALIDATION_MODE", "warn")  # "strict", "warn", or "detailed"
-    
-    if validation_mode == "strict" and not validation_report["coverage_complete"]:
-        print("❌ Strict validation mode: Upload failed due to validation errors")
-        error_details = {
-            "validation_failed": True,
-            "errors": validation_report["errors"],
-            "warnings": validation_report["warnings"],
-            "text_coverage": validation_report["text_coverage_percentage"],
-            "timeline_coverage": validation_report["timeline_coverage_percentage"],
-            "missing_subtitles": len(validation_report["missing_subtitles"]),
-            "detailed_report": validation_report["detailed_report"]
-        }
-        raise HTTPException(
-            status_code=422, 
-            detail=f"Transcript validation failed: {validation_report['errors']}"
+        # Perform timestamp-aware chunking
+        chunks = split_subtitles_into_chunks_with_timestamps(
+            subtitles=subtitles,
+            chunk_size=400,  # Adjust chunk size as needed
+            chunk_overlap=75  # Adjust overlap as needed
         )
-    elif not validation_report["coverage_complete"]:
-        print("⚠️ Validation issues detected!")
-        print(validation_report["detailed_report"])
-        print("⚠️ Continuing with warnings - check temp file for details")
-    else:
-        print("✅ Validation passed - all subtitles covered!")
+        print(f"Chunks created: {chunks}")  # Debug: Print created chunks
 
-    # 9. Create Qdrant payloads (add bio_tags array, etc.)
-    from constants import BIOGRAPHICAL_CATEGORY_KEYS
-    def create_payload(chunk):
-        payload = {
-            "original_text": chunk.get("text"),
-            "timestamp": f"{chunk.get('start')} - {chunk.get('end')}",
-            "transcript_name": chunk.get("transcript_name"),
-            "date": chunk.get("date"),
-            "category": chunk.get("category"),
-            "location": chunk.get("location"),
-            "speaker": chunk.get("speaker"),
-            "satsang_name": chunk.get("satsang_name"),
-            "satsang_code": chunk.get("satsang_code"),
-            "misc_tags": chunk.get("misc_tags", []),
-            "summary": chunk.get("summary", ""),
-            "tags": chunk.get("tags", []),
-            "global_tags": chunk.get("global_tags", []),
-            "entities": chunk.get("entities", {}),
-            "biographical_extractions": chunk.get("biographical_extractions", {}),
+        # Enrich each chunk with metadata
+        enriched_chunks = []
+        transcript_name = satsang_name or file.filename.rsplit('.', 1)[0]
+        date_str = date or datetime.now().strftime('%Y-%m-%d')
+        tags_list = [t.strip() for t in misc_tags.split(",") if t.strip()]
+
+        for i, chunk in enumerate(chunks):
+            chunk_text = chunk["text"]
+            enrichment_data = enrich_chunk_with_llm(chunk_text)
+            embedding_vector = get_embedding(chunk_text)
+
+            if not embedding_vector:
+                print(f"Warning: Skipping chunk {i+1} due to failed embedding generation.")
+                continue
+
+            # Prepare the final payload for this chunk
+            chunk_payload = {
+                "transcript_name": transcript_name,
+                "satsang_name": satsang_name,
+                "text": chunk_text,
+                "start_time": chunk["start"],  # Include start timestamp
+                "end_time": chunk["end"],      # Include end timestamp
+                "summary": enrichment_data.get("summary", ""),
+                "tags": enrichment_data.get("tags", []),
+                "date": date_str,
+                "category": category,
+                "location": location,
+                "speaker": speaker,
+                "misc_tags": tags_list
+            }
+
+            enriched_chunks.append({
+                "embedding": embedding_vector,
+                "payload": chunk_payload
+            })
+
+        # Store the final list of enriched chunks in Qdrant
+        chunks_uploaded_count = store_chunks(enriched_chunks)
+
+        # Return a simplified success response
+        return {
+            "status": "success",
+            "message": f"Successfully processed and stored {chunks_uploaded_count} chunks.",
+            "chunks_uploaded": chunks_uploaded_count
         }
-        # Clean bio data - only include categories with content, and create bio_tags array
-        bio_data = chunk.get("biographical_extractions", {})
-        cleaned_bio_data = {cat: quotes for cat, quotes in bio_data.items() if quotes}
-        payload["biographical_extractions"] = cleaned_bio_data
-        
-        # Create bio_tags array from categories that have data (non-empty arrays)
-        bio_tags = list(cleaned_bio_data.keys())
-        payload["bio_tags"] = bio_tags
-        return payload
 
-    # 10. Store chunks in Qdrant
-    qdrant_chunks = []
-    for chunk in enriched_chunks:
-        payload = create_payload(chunk)
-        chunk["payload"] = payload
-        qdrant_chunks.append(chunk)
-    
-    # 11. Save chunks and validation report to temporary file for debugging
-    temp_dir = tempfile.gettempdir()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    temp_filename = f"chunks_{transcript_name}_{timestamp}.json"
-    temp_filepath = os.path.join(temp_dir, temp_filename)
-    
-    try:
-        # Create a simplified version for JSON serialization
-        chunks_for_file = []
-        for chunk in qdrant_chunks:
-            chunk_copy = chunk.copy()
-            # Remove the embedding vector as it's too large for text file
-            if 'embedding' in chunk_copy:
-                chunk_copy['embedding'] = f"[Vector of length {len(chunk_copy['embedding'])}]"
-            chunks_for_file.append(chunk_copy)
-        
-        with open(temp_filepath, 'w', encoding='utf-8') as temp_file:
-            json.dump({
-                "transcript_info": {
-                    "filename": file.filename,
-                    "transcript_name": transcript_name,
-                    "upload_time": datetime.now().isoformat(),
-                    "metadata": {
-                        "category": category,
-                        "location": location,
-                        "speaker": speaker,
-                        "satsang_name": satsang_name,
-                        "satsang_code": satsang_code,
-                        "misc_tags": tags_list,
-                        "date": date_str
-                    },
-                    "total_chunks": len(chunks_for_file)
-                },
-                "validation_report": validation_report,
-                "chunks": chunks_for_file
-            }, temp_file, indent=2, ensure_ascii=False)
-        
-        print(f"✅ Chunks saved to temporary file: {temp_filepath}")
-        
     except Exception as e:
-        print(f"⚠️ Warning: Could not save chunks to temp file: {str(e)}")
-        # Continue execution even if temp file save fails
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing transcript: {str(e)}")
     
-    store_chunks(qdrant_chunks)
 
-    # 12. Prepare validation info for response
-    validation_mode = os.getenv("VALIDATION_MODE", "warn")
-    include_validation = validation_mode in ["detailed", "strict"] or not validation_report["coverage_complete"]
-    
-    validation_info = None
-    if include_validation:
-        validation_info = ValidationInfo(
-            coverage_complete=validation_report["coverage_complete"],
-            text_coverage_percentage=validation_report["text_coverage_percentage"],
-            timeline_coverage_percentage=validation_report["timeline_coverage_percentage"],
-            missing_subtitles_count=len(validation_report["missing_subtitles"]),
-            timeline_gaps_count=len(validation_report["gaps_in_timeline"]),
-            overlapping_chunks_count=len(validation_report["overlapping_chunks"]),
-            errors=validation_report["errors"],
-            warnings=validation_report["warnings"],
-            detailed_report=validation_report["detailed_report"] if validation_mode == "detailed" else None
+@app.post("/transcripts/{transcript_name}/extract-entities", response_model=EntityExtractionResponse)
+async def extract_entities(
+    transcript_name: str,
+    request: EntityExtractionRequest = None
+):
+    """
+    Extract entities from all chunks of a specific transcript.
+    This will update the chunks in Qdrant with entity extractions.
+    """
+    try:
+        # Get parameters from request
+        use_ai = True
+        include_statistics = True
+        if request:
+            use_ai = request.use_ai if request.use_ai is not None else True
+            include_statistics = request.include_statistics if request.include_statistics is not None else True
+        
+        # Get all chunks for the transcript
+        print(f"Retrieving chunks for transcript: {transcript_name}")
+        chunks = get_chunks_for_transcript(transcript_name)
+        
+        if not chunks:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No chunks found for transcript '{transcript_name}'"
+            )
+        
+        print(f"Found {len(chunks)} chunks for '{transcript_name}'")
+        
+        # Extract entities from chunks
+        entity_results = extract_entities_from_chunks(
+            chunks=chunks,
+            transcript_name=transcript_name,
+            use_ai=use_ai
         )
-
-    return UploadTranscriptResponse(
-        status="success", 
-        chunks_uploaded=len(qdrant_chunks),
-        validation=validation_info
-    )
-
-@app.post("/process-entities/{name}")
-async def process_entities(name: str):
-    # Dummy: fetch chunks, extract entities, update DB
-    chunks = get_chunks_for_transcript(name)
-    entities = extract_entities_from_chunks(chunks, name)
-    # Update DB with entities (not implemented)
-    return success_response({"entities": entities})
+        
+        # Count successful extractions and update Qdrant
+        chunks_updated = 0
+        method_used = "AI" if use_ai else "rule-based"
+        
+        for i, (chunk, entity_result) in enumerate(zip(chunks, entity_results)):
+            if entity_result:
+                # Update the chunk in Qdrant with entity data
+                point_id = chunk.get('id')
+                if point_id:
+                    success = update_chunk_with_entity_data(point_id, entity_result)
+                    if success:
+                        chunks_updated += 1
+                        print(f"✅ Updated chunk {i+1}/{len(chunks)} with entity data")
+                    else:
+                        print(f"❌ Failed to update chunk {i+1}/{len(chunks)} in Qdrant")
+                else:
+                    print(f"⚠️ Chunk {i+1}/{len(chunks)} missing point ID, skipping Qdrant update")
+            else:
+                print(f"⚠️ Chunk {i+1}/{len(chunks)} has no entity data, skipping")
+        
+        # Calculate statistics if requested
+        entity_statistics = None
+        if include_statistics:
+            entity_statistics = get_entity_statistics(entity_results)
+        
+        return EntityExtractionResponse(
+            status="success",
+            transcript_name=transcript_name,
+            chunks_processed=len(chunks),
+            chunks_updated=chunks_updated,
+            method_used=method_used,
+            entity_statistics=entity_statistics
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error during entity extraction: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error extracting entities: {str(e)}"
+        )
 
 @app.post("/extract-bio/{name}")
 async def extract_bio(name: str):
@@ -496,39 +488,3 @@ async def get_bio_extraction_status(transcript_name: str):
             detail=f"Error checking biographical status: {str(e)}"
         )
 
-def process_transcript_with_llm(subtitles, prompt):
-    import json
-    import os
-
-    input_json = json.dumps(subtitles, ensure_ascii=False)
-    full_prompt = f"{prompt}\n\nINPUT:\n{input_json}\n\nOUTPUT:"
-
-    model_name = os.getenv("ANSWER_EXTRACTION_MODEL", "gpt-4o")
-
-    response = openai.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant for transcript chunking."},
-            {"role": "user", "content": full_prompt}
-        ],
-        temperature=0.2,
-        max_tokens=16384
-    )
-    output_text = response.choices[0].message.content.strip()
-    print("=== LLM Raw Output ===")
-    print(output_text)
-
-    # Fallback: Remove markdown code block if present
-    if output_text.startswith("```"):
-        output_text = output_text.split("```")[1]
-        if output_text.strip().startswith("json"):
-            output_text = output_text.strip()[4:]
-        output_text = output_text.strip()
-
-    try:
-        result = json.loads(output_text)
-    except Exception:
-        result = {"raw_output": output_text}
-    ##print("=== Parsed Chunks ===")
-    ##print(result.get("chunks"))
-    return result

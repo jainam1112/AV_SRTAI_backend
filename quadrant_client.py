@@ -22,15 +22,6 @@ else:
     print("Warning: QDRANT_HOST not found in environment variables")
 
 
-import os
-import requests
-from embedding import get_embedding
-from dotenv import load_dotenv
-import pprint
-import uuid  # <-- STEP 1: Import the UUID library
-
-# ... (rest of your script setup) ...
-
 def store_chunks(chunks):
     """Store chunks in Qdrant vector database using UUIDs for IDs."""
     if not QDRANT_API_URL:
@@ -241,6 +232,49 @@ def update_chunk_with_bio_data(point_id, bio_extraction, chunk_payload=None):
         # Create bio_tags array from categories that have data (non-empty arrays)
         bio_tags = list(cleaned_bio_data.keys())
         payload_update["bio_tags"] = bio_tags
+    
+    return update_chunk_payload(point_id, payload_update)
+
+def update_chunk_with_entity_data(point_id, entity_extraction, chunk_payload=None):
+    """
+    Update a chunk's payload with entity extraction data.
+    This merges entity data into the existing payload structure.
+    
+    Args:
+        point_id: The Qdrant point ID
+        entity_extraction: Dictionary containing extracted entities
+        chunk_payload: Optional current payload to merge with (if not provided, will fetch from Qdrant)
+    
+    Returns:
+        bool: Success status
+    """
+    if not QDRANT_API_URL:
+        print("Warning: Qdrant not configured")
+        return False
+    
+    # Clean entity data - only include categories with content
+    cleaned_entities = {}
+    for category, data in entity_extraction.items():
+        if category == "self_references":
+            # Always include boolean field
+            cleaned_entities[category] = bool(data)
+        elif isinstance(data, list) and data:
+            # Only include non-empty lists
+            cleaned_entities[category] = data
+    
+    # Create entity_tags array from categories that have data
+    entity_tags = []
+    for category, data in cleaned_entities.items():
+        if category == "self_references" and data:
+            entity_tags.append("self_references")
+        elif isinstance(data, list) and data:
+            entity_tags.append(category)
+    
+    # Just update the entity-related fields
+    payload_update = {
+        "entities": cleaned_entities,
+        "entity_tags": entity_tags
+    }
     
     return update_chunk_payload(point_id, payload_update)
 
