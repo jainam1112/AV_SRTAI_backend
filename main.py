@@ -239,11 +239,35 @@ async def extract_bio(name: str):
     return success_response({"biographical_extractions": bio})
 
 # Search & Retrieval
-@app.post("/search", response_model=SearchResponse)
+@app.post("/search")
 async def search(query: dict):
     search_text = query.get("query", "")
     results = search_chunks(search_text)
-    return SearchResponse(results=results, total=len(results), page=1, page_size=len(results))
+    chunks = results.get("result", results)
+    # Simplify output
+    simplified_chunks = [
+        {
+            "id": chunk.get("id"),
+            "score": chunk.get("score"),
+            "transcript_name": chunk["payload"].get("transcript_name"),
+            "timestamp": chunk["payload"].get("timestamp"),
+            "text": chunk["payload"].get("original_text") or chunk["payload"].get("text")
+        }
+        for chunk in chunks
+    ]
+    return {"chunks": simplified_chunks, "total": len(simplified_chunks)}
+
+@app.post("/search-transcripts")
+async def search_transcripts(query: dict):
+    search_text = query.get("query", "")
+    results = search_chunks(search_text)
+    transcript_names = set()
+    for chunk in results.get("result", []):
+        payload = chunk.get("payload", {})
+        name = payload.get("transcript_name") or payload.get("satsang_name")
+        if name:
+            transcript_names.add(name)
+    return {"transcripts": list(transcript_names)}
 
 @app.get("/transcripts")
 async def get_transcripts():

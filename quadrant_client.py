@@ -279,25 +279,25 @@ def update_chunk_with_entity_data(point_id, entity_extraction, chunk_payload=Non
     return update_chunk_payload(point_id, payload_update)
 
 def search_chunks(query_text, limit=10):
-    # Get embedding for the search query
+    print(f"Searching for: {query_text}")
     query_embedding = get_embedding(query_text)
-    
+    print(f"Query embedding: {query_embedding[:5]}...")  # Print first 5 values
     payload = {
         "vector": query_embedding,
         "limit": limit,
         "with_payload": True
     }
-    
     headers = {
         "Content-Type": "application/json",
         "api-key": QDRANT_API_KEY
     }
-    
     search_url = f"https://{QDRANT_HOST}:{QDRANT_PORT}/collections/{COLLECTION_NAME}/points/search"
     response = requests.post(search_url, json=payload, headers=headers)
+    print(f"Qdrant response status: {response.status_code}")
+    print(f"Qdrant response body: {response.text[:200]}")
     response.raise_for_status()
-    
-    return response.json()
+    result = response.json()
+    return result
 
 def qdrant_url(path):
     """Helper function to construct the full Qdrant URL."""
